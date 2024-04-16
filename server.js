@@ -3,10 +3,12 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const mysql = require("mysql2/promise");
 const dotenv = require("dotenv");
+const cors = require("cors");
 
 dotenv.config();
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 // MySQL database configuration
@@ -86,5 +88,5 @@ app.post("/api/login", async (req, res) => {
 
 // Start the server
 app.listen(5002, () => {
-  console.log("Server is running on port 5000");
+  console.log("Server is running on port 5002");
 });
