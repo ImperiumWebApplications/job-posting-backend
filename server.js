@@ -85,6 +85,6 @@ app.post("/api/login", async (req, res) => {
 });
 
 // Start the server
-app.listen(5000, () => {
+app.listen(5002, () => {
   console.log("Server is running on port 5000");
 });
