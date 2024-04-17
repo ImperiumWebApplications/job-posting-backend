@@ -1,9 +1,12 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const mysql = require("mysql2/promise");
 const dotenv = require("dotenv");
 const cors = require("cors");
+const { S3Client } = require("@aws-sdk/client-s3");
+const multer = require("multer");
+const multerS3 = require("multer-s3");
+const { authenticateToken, pool } = require("./utilities");
 
 dotenv.config();
 
@@ -11,26 +14,32 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MySQL database configuration
-const dbConfig = {
-  host: process.env.DB_HOST,
-  user: process.env.DB_USERNAME,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_DATABASE,
-};
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+const upload = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.S3_BUCKET_NAME,
+    key: function (req, file, cb) {
+      cb(null, `resumes/${Date.now()}_${file.originalname}`);
+    },
+  }),
+});
 
 // User registration endpoint
 app.post("/api/register", async (req, res) => {
   const { username, password } = req.body;
 
   try {
-    const connection = await mysql.createConnection(dbConfig);
-
     // Check if user already exists
-    const [rows] = await connection.execute(
-      "SELECT * FROM users WHERE username = ?",
-      [username]
-    );
+    const [rows] = await pool.query("SELECT * FROM users WHERE username = ?", [
+      username,
+    ]);
     if (rows.length > 0) {
       return res.status(409).json({ message: "User already exists" });
     }
@@ -39,10 +48,10 @@ app.post("/api/register", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create a new user
-    await connection.execute(
-      "INSERT INTO users (username, password) VALUES (?, ?)",
-      [username, hashedPassword]
-    );
+    await pool.query("INSERT INTO users (username, password) VALUES (?, ?)", [
+      username,
+      hashedPassword,
+    ]);
 
     res.status(201).json({ message: "User registered successfully" });
   } catch (error) {
@@ -56,13 +65,10 @@ app.post("/api/login", async (req, res) => {
   const { username, password } = req.body;
 
   try {
-    const connection = await mysql.createConnection(dbConfig);
-
     // Find the user by username
-    const [rows] = await connection.execute(
-      "SELECT * FROM users WHERE username = ?",
-      [username]
-    );
+    const [rows] = await pool.query("SELECT * FROM users WHERE username = ?", [
+      username,
+    ]);
     const user = rows[0];
 
     if (!user) {
@@ -77,7 +83,7 @@ app.post("/api/login", async (req, res) => {
     }
 
     // Generate a JWT token
-    const token = jwt.sign({ username: user.username }, "your-secret-key");
+    const token = jwt.sign({ username: user.username }, process.env.JWT_SECRET);
 
     res.json({ token });
   } catch (error) {
@@ -86,26 +92,109 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-app.get("/api/check-registration", async (req, res) => {
-  const { userId } = req; // Assume userId is extracted from the JWT token
-
+app.get("/api/user-details", authenticateToken, async (req, res) => {
   try {
-    const connection = await mysql.createConnection(dbConfig);
-    const [rows] = await connection.execute(
+    // Fetch user by username to get the userID
+    const [userRows] = await pool.query(
+      "SELECT user_id, profile_category FROM users WHERE username = ?",
+      [req.user.username]
+    );
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userId = userRows[0].user_id;
+    const profileCategory = userRows[0].profile_category;
+
+    // Retrieve general user information and check registration status
+    const [rows] = await pool.query(
       "SELECT is_registered FROM users WHERE user_id = ?",
       [userId]
     );
-    if (rows.length > 0) {
-      res.json({ isRegistered: rows[0].is_registered });
+
+    if (rows.length === 0 || !rows[0].is_registered) {
+      res.json({ isRegistered: false });
     } else {
-      res.status(404).json({ message: "User not found" });
+      // Additional query to get detailed information based on user profile category
+      let detailsQuery = "";
+      if (profileCategory === "employer") {
+        detailsQuery =
+          "SELECT companyName, address FROM emp_master WHERE user_id = ?";
+      } else if (profileCategory === "jobSeeker") {
+        detailsQuery =
+          "SELECT firstName, lastName, skills, workExperience, resume_url FROM job_seeker_master WHERE user_id = ?";
+      }
+
+      const [details] = await pool.query(detailsQuery, [userId]);
+
+      // Send back user details along with registration status
+      res.json({
+        isRegistered: true,
+        userDetails:
+          details.length > 0
+            ? { ...details[0], username: req.user.username }
+            : null,
+      });
     }
   } catch (error) {
-    console.error("Error checking registration status:", error);
+    console.error("Error fetching user details:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
 
+app.post(
+  "/api/profile/:type",
+  authenticateToken,
+  upload.single("resume"),
+  async (req, res) => {
+    const type = req.params.type;
+    const {
+      firstName,
+      lastName,
+      companyName,
+      address,
+      skills,
+      workExperience,
+    } = req.body;
+    const resumeUrl = req.file ? req.file.location : null;
+
+    try {
+      const [userRows] = await pool.query(
+        "SELECT user_id FROM users WHERE username = ?",
+        [req.user.username]
+      );
+      const userId = userRows[0].user_id;
+
+      // Insert into respective table based on profile type and update users table
+      if (type === "employer") {
+        await pool.query(
+          "INSERT INTO emp_master (user_id, companyName, address) VALUES (?, ?, ?)",
+          [userId, companyName, address]
+        );
+        await pool.query(
+          "UPDATE users SET is_registered = TRUE, profile_category = 'employer' WHERE user_id = ?",
+          [userId]
+        );
+      } else if (type === "jobSeeker") {
+        await pool.query(
+          "INSERT INTO job_seeker_master (user_id, firstName, lastName, skills, workExperience, resume_url) VALUES (?, ?, ?, ?, ?, ?)",
+          [userId, firstName, lastName, skills, workExperience, resumeUrl]
+        );
+        await pool.query(
+          "UPDATE users SET is_registered = TRUE, profile_category = 'jobSeeker' WHERE user_id = ?",
+          [userId]
+        );
+      }
+
+      res
+        .status(201)
+        .json({ message: "Profile created and user updated successfully" });
+    } catch (error) {
+      console.error("Error creating profile:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
 // Start the server
 app.listen(5002, () => {
   console.log("Server is running on port 5002");
