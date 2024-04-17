@@ -86,6 +86,26 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+app.get("/api/check-registration", async (req, res) => {
+  const { userId } = req; // Assume userId is extracted from the JWT token
+
+  try {
+    const connection = await mysql.createConnection(dbConfig);
+    const [rows] = await connection.execute(
+      "SELECT is_registered FROM users WHERE user_id = ?",
+      [userId]
+    );
+    if (rows.length > 0) {
+      res.json({ isRegistered: rows[0].is_registered });
+    } else {
+      res.status(404).json({ message: "User not found" });
+    }
+  } catch (error) {
+    console.error("Error checking registration status:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 // Start the server
 app.listen(5002, () => {
   console.log("Server is running on port 5002");
