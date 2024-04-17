@@ -314,7 +314,7 @@ app.get("/api/job-seeker/:username", authenticateToken, async (req, res) => {
 });
 
 // Get jobs posted by the logged-in employer
-app.get("/api/jobs", authenticateToken, async (req, res) => {
+app.get("/api/jobs_for_user", authenticateToken, async (req, res) => {
   try {
     // Fetch user by username to get the userID
     const [userRows] = await pool.query(
@@ -430,6 +430,94 @@ app.put("/api/jobs/:id", authenticateToken, async (req, res) => {
     res.json({ message: "Job updated successfully" });
   } catch (error) {
     console.error("Error updating job:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Get all jobs with tag filtering
+app.get("/api/jobs", authenticateToken, async (req, res) => {
+  try {
+    const { job_title } = req.query;
+    let query = "SELECT * FROM jobs";
+    let values = [];
+
+    if (job_title) {
+      query += " WHERE job_title LIKE ?";
+      values.push(`%${job_title}%`);
+    }
+
+    const [jobs] = await pool.query(query, values);
+    res.json({ jobs });
+  } catch (error) {
+    console.error("Error fetching jobs:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Apply for a job
+app.post("/api/apply-job", authenticateToken, async (req, res) => {
+  try {
+    const { jobId } = req.body;
+    const [userRows] = await pool.query(
+      "SELECT user_id, profile_category FROM users WHERE username = ?",
+      [req.user.username]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userId = userRows[0].user_id;
+
+    // Check if the user has already applied for the job
+    const [existingApplication] = await pool.query(
+      "SELECT * FROM job_applications WHERE user_id = ? AND job_id = ?",
+      [userId, jobId]
+    );
+
+    if (existingApplication.length > 0) {
+      return res
+        .status(400)
+        .json({ message: "You have already applied for this job" });
+    }
+
+    // Insert the job application into the database
+    await pool.query(
+      "INSERT INTO job_applications (user_id, job_id) VALUES (?, ?)",
+      [userId, jobId]
+    );
+
+    res.json({ message: "Job application submitted successfully" });
+  } catch (error) {
+    console.error("Error applying for job:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Get applied jobs for the logged-in user
+app.get("/api/applied-jobs", authenticateToken, async (req, res) => {
+  try {
+    const [userRows] = await pool.query(
+      "SELECT user_id, profile_category FROM users WHERE username = ?",
+      [req.user.username]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userId = userRows[0].user_id;
+
+    const [appliedJobs] = await pool.query(
+      "SELECT job_id FROM job_applications WHERE user_id = ?",
+      [userId]
+    );
+
+    const appliedJobIds = appliedJobs.map((application) => application.job_id);
+
+    res.json({ appliedJobs: appliedJobIds });
+  } catch (error) {
+    console.error("Error fetching applied jobs:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
