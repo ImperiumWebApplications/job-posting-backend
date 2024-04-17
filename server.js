@@ -191,7 +191,6 @@ app.post("/api/profile/:type", authenticateToken, upload, async (req, res) => {
 
 app.post("/api/update-user", authenticateToken, upload, async (req, res) => {
   try {
-    console.log("req body", req.body);
     // Fetch user by username to get the userID
     const [userRows] = await pool.query(
       "SELECT user_id, profile_category FROM users WHERE username = ?",
