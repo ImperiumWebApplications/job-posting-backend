@@ -249,15 +249,20 @@ app.post("/api/update-user", authenticateToken, upload, async (req, res) => {
 
 app.get("/api/job-seekers", authenticateToken, async (req, res) => {
   try {
-    // Retrieve all job seeker profiles
-    const [jobSeekerRows] = await pool.query(
-      `
-      SELECT u.user_id, u.username, jsm.email
+    const { skills } = req.query;
+
+    let query = `
+      SELECT u.user_id, u.username, jsm.email, jsm.skills
       FROM users u
       JOIN job_seeker_master jsm ON u.user_id = jsm.user_id
       WHERE u.profile_category = 'jobSeeker'
-      `
-    );
+    `;
+
+    if (skills) {
+      query += ` AND jsm.skills LIKE '%${skills}%'`;
+    }
+
+    const [jobSeekerRows] = await pool.query(query);
 
     const jobSeekers = jobSeekerRows.map((row) => ({
       username: row.username,
@@ -304,6 +309,127 @@ app.get("/api/job-seeker/:username", authenticateToken, async (req, res) => {
     res.json({ jobSeekerDetails });
   } catch (error) {
     console.error("Error fetching job seeker details:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Get jobs posted by the logged-in employer
+app.get("/api/jobs", authenticateToken, async (req, res) => {
+  try {
+    // Fetch user by username to get the userID
+    const [userRows] = await pool.query(
+      "SELECT user_id, profile_category FROM users WHERE username = ?",
+      [req.user.username]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userId = userRows[0].user_id;
+
+    const [jobs] = await pool.query("SELECT * FROM jobs WHERE user_id = ?", [
+      userId,
+    ]);
+
+    res.json({ jobs });
+  } catch (error) {
+    console.error("Error fetching jobs:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Post a new job
+app.post("/api/jobs", authenticateToken, async (req, res) => {
+  try {
+    const { jobTitle, jobDescription, tags, budget, duration } = req.body;
+    // Fetch user by username to get the userID
+    const [userRows] = await pool.query(
+      "SELECT user_id, profile_category FROM users WHERE username = ?",
+      [req.user.username]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userId = userRows[0].user_id;
+
+    await pool.query(
+      "INSERT INTO jobs (user_id, job_title, job_description, tags, budget, duration) VALUES (?, ?, ?, ?, ?, ?)",
+      [userId, jobTitle, jobDescription, tags, budget, duration]
+    );
+
+    res.json({ message: "Job posted successfully" });
+  } catch (error) {
+    console.error("Error posting job:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+// Get job details by ID
+app.get("/api/jobs/:id", authenticateToken, async (req, res) => {
+  try {
+    const jobId = req.params.id;
+    const [userRows] = await pool.query(
+      "SELECT user_id, profile_category FROM users WHERE username = ?",
+      [req.user.username]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userId = userRows[0].user_id;
+
+    const [job] = await pool.query(
+      "SELECT * FROM jobs WHERE job_id = ? AND user_id = ?",
+      [jobId, userId]
+    );
+
+    if (job.length === 0) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    res.json({ job: job[0] });
+  } catch (error) {
+    console.error("Error fetching job details:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Update job details
+app.put("/api/jobs/:id", authenticateToken, async (req, res) => {
+  try {
+    const jobId = req.params.id;
+    const [userRows] = await pool.query(
+      "SELECT user_id, profile_category FROM users WHERE username = ?",
+      [req.user.username]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userId = userRows[0].user_id;
+    const { jobTitle, jobDescription, tags, budget, duration } = req.body;
+
+    const [job] = await pool.query(
+      "SELECT * FROM jobs WHERE job_id = ? AND user_id = ?",
+      [jobId, userId]
+    );
+
+    if (job.length === 0) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    await pool.query(
+      "UPDATE jobs SET job_title = ?, job_description = ?, tags = ?, budget = ?, duration = ? WHERE job_id = ?",
+      [jobTitle, jobDescription, tags, budget, duration, jobId]
+    );
+
+    res.json({ message: "Job updated successfully" });
+  } catch (error) {
+    console.error("Error updating job:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
