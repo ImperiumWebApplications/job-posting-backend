@@ -122,7 +122,7 @@ app.get("/api/user-details", authenticateToken, async (req, res) => {
           "SELECT companyName, address FROM emp_master WHERE user_id = ?";
       } else if (profileCategory === "jobSeeker") {
         detailsQuery =
-          "SELECT firstName, lastName, skills, workExperience, resume_url FROM job_seeker_master WHERE user_id = ?";
+          "SELECT firstName, lastName, skills, workExperience, email, resume_url FROM job_seeker_master WHERE user_id = ?";
       }
 
       const [details] = await pool.query(detailsQuery, [userId]);
@@ -148,8 +148,15 @@ app.get("/api/user-details", authenticateToken, async (req, res) => {
 
 app.post("/api/profile/:type", authenticateToken, upload, async (req, res) => {
   const type = req.params.type;
-  const { firstName, lastName, companyName, address, skills, workExperience } =
-    req.body;
+  const {
+    firstName,
+    lastName,
+    companyName,
+    address,
+    skills,
+    email,
+    workExperience,
+  } = req.body;
   const resumeUrl = req.file ? req.file.location : null;
 
   try {
@@ -171,8 +178,8 @@ app.post("/api/profile/:type", authenticateToken, upload, async (req, res) => {
       );
     } else if (type === "jobSeeker") {
       await pool.query(
-        "INSERT INTO job_seeker_master (user_id, firstName, lastName, skills, workExperience, resume_url) VALUES (?, ?, ?, ?, ?, ?)",
-        [userId, firstName, lastName, skills, workExperience, resumeUrl]
+        "INSERT INTO job_seeker_master (user_id, firstName, lastName, skills, workExperience, email, resume_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [userId, firstName, lastName, skills, workExperience, email, resumeUrl]
       );
       await pool.query(
         "UPDATE users SET is_registered = TRUE, profile_category = 'jobSeeker' WHERE user_id = ?",
@@ -214,11 +221,11 @@ app.post("/api/update-user", authenticateToken, upload, async (req, res) => {
       );
     } else if (profileCategory === "jobSeeker") {
       // Update job seeker details
-      const { firstName, lastName, skills, workExperience } = req.body;
+      const { firstName, lastName, skills, workExperience, email } = req.body;
 
       await pool.query(
-        "UPDATE job_seeker_master SET firstName = ?, lastName = ?, skills = ?, workExperience = ? WHERE user_id = ?",
-        [firstName, lastName, skills, workExperience, userId]
+        "UPDATE job_seeker_master SET firstName = ?, lastName = ?, skills = ?, workExperience = ?, email = ? WHERE user_id = ?",
+        [firstName, lastName, skills, workExperience, email, userId]
       );
 
       // Handle resume upload if provided
@@ -236,6 +243,67 @@ app.post("/api/update-user", authenticateToken, upload, async (req, res) => {
     res.json({ message: "User details updated successfully" });
   } catch (error) {
     console.error("Error updating user details:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.get("/api/job-seekers", authenticateToken, async (req, res) => {
+  try {
+    // Retrieve all job seeker profiles
+    const [jobSeekerRows] = await pool.query(
+      `
+      SELECT u.user_id, u.username, jsm.email
+      FROM users u
+      JOIN job_seeker_master jsm ON u.user_id = jsm.user_id
+      WHERE u.profile_category = 'jobSeeker'
+      `
+    );
+
+    const jobSeekers = jobSeekerRows.map((row) => ({
+      username: row.username,
+      email: row.email,
+      user_id: row.user_id,
+    }));
+
+    res.json({ jobSeekers });
+  } catch (error) {
+    console.error("Error fetching job seekers:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.get("/api/job-seeker/:username", authenticateToken, async (req, res) => {
+  try {
+    const { username } = req.params;
+
+    // Retrieve job seeker details based on the provided username
+    const [jobSeekerRows] = await pool.query(
+      `
+      SELECT u.username, jsm.firstName, jsm.lastName, jsm.email, jsm.skills, jsm.workExperience, jsm.resume_url
+      FROM users u
+      JOIN job_seeker_master jsm ON u.user_id = jsm.user_id
+      WHERE u.username = ? AND u.profile_category = 'jobSeeker'
+      `,
+      [username]
+    );
+
+    if (jobSeekerRows.length === 0) {
+      return res.status(404).json({ message: "Job seeker not found" });
+    }
+
+    const jobSeekerDetails = {
+      username: jobSeekerRows[0].username,
+      firstName: jobSeekerRows[0].firstName,
+      lastName: jobSeekerRows[0].lastName,
+      email: jobSeekerRows[0].email,
+      skills: jobSeekerRows[0].skills,
+      workExperience: jobSeekerRows[0].workExperience,
+      resumeUrl: jobSeekerRows[0].resume_url,
+    };
+
+    res.json({ jobSeekerDetails });
+  } catch (error) {
+    console.error("Error fetching job seeker details:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
