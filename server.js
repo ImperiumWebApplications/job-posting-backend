@@ -521,6 +521,28 @@ app.get("/api/applied-jobs", authenticateToken, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
+// Get applicants for a job
+app.get("/api/jobs/:id/applicants", authenticateToken, async (req, res) => {
+  try {
+    const jobId = req.params.id;
+
+    const [applicants] = await pool.query(
+      `
+      SELECT u.user_id, u.username
+      FROM users u
+      JOIN job_applications ja ON u.user_id = ja.user_id
+      WHERE ja.job_id = ?
+      `,
+      [jobId]
+    );
+
+    res.json({ applicants });
+  } catch (error) {
+    console.error("Error fetching applicants:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 // Start the server
 app.listen(5002, () => {
   console.log("Server is running on port 5002");
