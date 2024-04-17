@@ -340,7 +340,7 @@ app.get("/api/jobs_for_user", authenticateToken, async (req, res) => {
 });
 
 // Post a new job
-app.post("/api/jobs", authenticateToken, async (req, res) => {
+app.post("/api/jobs_for_user", authenticateToken, async (req, res) => {
   try {
     const { jobTitle, jobDescription, tags, budget, duration } = req.body;
     // Fetch user by username to get the userID
