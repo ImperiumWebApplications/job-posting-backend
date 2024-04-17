@@ -29,7 +29,7 @@ const upload = multer({
       cb(null, `resumes/${Date.now()}_${file.originalname}`);
     },
   }),
-});
+}).single("resume");
 
 // User registration endpoint
 app.post("/api/register", async (req, res) => {
@@ -132,7 +132,11 @@ app.get("/api/user-details", authenticateToken, async (req, res) => {
         isRegistered: true,
         userDetails:
           details.length > 0
-            ? { ...details[0], username: req.user.username }
+            ? {
+                ...details[0],
+                username: req.user.username,
+                profileType: profileCategory,
+              }
             : null,
       });
     }
@@ -142,59 +146,103 @@ app.get("/api/user-details", authenticateToken, async (req, res) => {
   }
 });
 
-app.post(
-  "/api/profile/:type",
-  authenticateToken,
-  upload.single("resume"),
-  async (req, res) => {
-    const type = req.params.type;
-    const {
-      firstName,
-      lastName,
-      companyName,
-      address,
-      skills,
-      workExperience,
-    } = req.body;
-    const resumeUrl = req.file ? req.file.location : null;
+app.post("/api/profile/:type", authenticateToken, upload, async (req, res) => {
+  const type = req.params.type;
+  const { firstName, lastName, companyName, address, skills, workExperience } =
+    req.body;
+  const resumeUrl = req.file ? req.file.location : null;
 
-    try {
-      const [userRows] = await pool.query(
-        "SELECT user_id FROM users WHERE username = ?",
-        [req.user.username]
+  try {
+    const [userRows] = await pool.query(
+      "SELECT user_id FROM users WHERE username = ?",
+      [req.user.username]
+    );
+    const userId = userRows[0].user_id;
+
+    // Insert into respective table based on profile type and update users table
+    if (type === "employer") {
+      await pool.query(
+        "INSERT INTO emp_master (user_id, companyName, address) VALUES (?, ?, ?)",
+        [userId, companyName, address]
       );
-      const userId = userRows[0].user_id;
+      await pool.query(
+        "UPDATE users SET is_registered = TRUE, profile_category = 'employer' WHERE user_id = ?",
+        [userId]
+      );
+    } else if (type === "jobSeeker") {
+      await pool.query(
+        "INSERT INTO job_seeker_master (user_id, firstName, lastName, skills, workExperience, resume_url) VALUES (?, ?, ?, ?, ?, ?)",
+        [userId, firstName, lastName, skills, workExperience, resumeUrl]
+      );
+      await pool.query(
+        "UPDATE users SET is_registered = TRUE, profile_category = 'jobSeeker' WHERE user_id = ?",
+        [userId]
+      );
+    }
 
-      // Insert into respective table based on profile type and update users table
-      if (type === "employer") {
+    res
+      .status(201)
+      .json({ message: "Profile created and user updated successfully" });
+  } catch (error) {
+    console.error("Error creating profile:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.post("/api/update-user", authenticateToken, upload, async (req, res) => {
+  try {
+    console.log("req body", req.body);
+    // Fetch user by username to get the userID
+    const [userRows] = await pool.query(
+      "SELECT user_id, profile_category FROM users WHERE username = ?",
+      [req.user.username]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userId = userRows[0].user_id;
+    const profileCategory = userRows[0].profile_category;
+    console.log("userId", userId);
+    console.log("profileCategory", profileCategory);
+    console.log("Incoming request body", req.body);
+
+    // Update user details based on profile category
+    if (profileCategory === "employer") {
+      // Update employer details
+      const { companyName, address } = req.body;
+      await pool.query(
+        "UPDATE emp_master SET companyName = ?, address = ? WHERE user_id = ?",
+        [companyName, address, userId]
+      );
+    } else if (profileCategory === "jobSeeker") {
+      // Update job seeker details
+      const { firstName, lastName, skills, workExperience } = req.body;
+
+      await pool.query(
+        "UPDATE job_seeker_master SET firstName = ?, lastName = ?, skills = ?, workExperience = ? WHERE user_id = ?",
+        [firstName, lastName, skills, workExperience, userId]
+      );
+
+      // Handle resume upload if provided
+      if (req.file) {
+        const resumeUrl = req.file.location;
+
+        // Update the resume URL in the database
         await pool.query(
-          "INSERT INTO emp_master (user_id, companyName, address) VALUES (?, ?, ?)",
-          [userId, companyName, address]
-        );
-        await pool.query(
-          "UPDATE users SET is_registered = TRUE, profile_category = 'employer' WHERE user_id = ?",
-          [userId]
-        );
-      } else if (type === "jobSeeker") {
-        await pool.query(
-          "INSERT INTO job_seeker_master (user_id, firstName, lastName, skills, workExperience, resume_url) VALUES (?, ?, ?, ?, ?, ?)",
-          [userId, firstName, lastName, skills, workExperience, resumeUrl]
-        );
-        await pool.query(
-          "UPDATE users SET is_registered = TRUE, profile_category = 'jobSeeker' WHERE user_id = ?",
-          [userId]
+          "UPDATE job_seeker_master SET resume_url = ? WHERE user_id = ?",
+          [resumeUrl, userId]
         );
       }
-
-      res
-        .status(201)
-        .json({ message: "Profile created and user updated successfully" });
-    } catch (error) {
-      console.error("Error creating profile:", error);
-      res.status(500).json({ message: "Internal server error" });
     }
+
+    res.json({ message: "User details updated successfully" });
+  } catch (error) {
+    console.error("Error updating user details:", error);
+    res.status(500).json({ message: "Internal server error" });
   }
-);
+});
 // Start the server
 app.listen(5002, () => {
   console.log("Server is running on port 5002");
