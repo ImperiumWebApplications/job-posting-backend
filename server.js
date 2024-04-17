@@ -544,6 +544,6 @@ app.get("/api/jobs/:id/applicants", authenticateToken, async (req, res) => {
   }
 });
 // Start the server
-app.listen(5002, () => {
+app.listen(process.env.PORT || 5002, () => {
   console.log("Server is running on port 5002");
 });
