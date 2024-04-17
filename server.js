@@ -204,9 +204,6 @@ app.post("/api/update-user", authenticateToken, upload, async (req, res) => {
 
     const userId = userRows[0].user_id;
     const profileCategory = userRows[0].profile_category;
-    console.log("userId", userId);
-    console.log("profileCategory", profileCategory);
-    console.log("Incoming request body", req.body);
 
     // Update user details based on profile category
     if (profileCategory === "employer") {
