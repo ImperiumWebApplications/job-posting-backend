@@ -33,7 +33,7 @@ const upload = multer({
 
 // User registration endpoint
 app.post("/api/register", async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, profileType } = req.body;
 
   try {
     // Check if user already exists
@@ -48,10 +48,10 @@ app.post("/api/register", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create a new user
-    await pool.query("INSERT INTO users (username, password) VALUES (?, ?)", [
-      username,
-      hashedPassword,
-    ]);
+    await pool.query(
+      "INSERT INTO users (username, password, profile_category) VALUES (?, ?, ?)",
+      [username, hashedPassword, profileType]
+    );
 
     res.status(201).json({ message: "User registered successfully" });
   } catch (error) {
@@ -91,29 +91,21 @@ app.post("/api/login", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
-
 app.get("/api/user-details", authenticateToken, async (req, res) => {
   try {
     // Fetch user by username to get the userID
     const [userRows] = await pool.query(
-      "SELECT user_id, profile_category FROM users WHERE username = ?",
+      "SELECT user_id, profile_category, is_registered FROM users WHERE username = ?",
       [req.user.username]
     );
     if (userRows.length === 0) {
       return res.status(404).json({ message: "User not found" });
     }
-
     const userId = userRows[0].user_id;
     const profileCategory = userRows[0].profile_category;
-
-    // Retrieve general user information and check registration status
-    const [rows] = await pool.query(
-      "SELECT is_registered FROM users WHERE user_id = ?",
-      [userId]
-    );
-
-    if (rows.length === 0 || !rows[0].is_registered) {
-      res.json({ isRegistered: false });
+    const isRegistered = userRows[0].is_registered;
+    if (!isRegistered) {
+      res.json({ isRegistered: false, profileType: profileCategory });
     } else {
       // Additional query to get detailed information based on user profile category
       let detailsQuery = "";
@@ -122,22 +114,18 @@ app.get("/api/user-details", authenticateToken, async (req, res) => {
           "SELECT companyName, address FROM emp_master WHERE user_id = ?";
       } else if (profileCategory === "jobSeeker") {
         detailsQuery =
-          "SELECT firstName, lastName, skills, workExperience, email, resume_url FROM job_seeker_master WHERE user_id = ?";
+          "SELECT firstName, lastName, skills, workExperience, email, resume_url, phoneNumber FROM job_seeker_master WHERE user_id = ?";
       }
-
       const [details] = await pool.query(detailsQuery, [userId]);
 
-      // Send back user details along with registration status
+      // Send back user details along with registration status and profile type
       res.json({
         isRegistered: true,
         userDetails:
           details.length > 0
-            ? {
-                ...details[0],
-                username: req.user.username,
-                profileType: profileCategory,
-              }
+            ? { ...details[0], username: req.user.username }
             : null,
+        profileType: profileCategory,
       });
     }
   } catch (error) {
@@ -156,6 +144,7 @@ app.post("/api/profile/:type", authenticateToken, upload, async (req, res) => {
     skills,
     email,
     workExperience,
+    phoneNumber,
   } = req.body;
   const resumeUrl = req.file ? req.file.location : null;
 
@@ -178,8 +167,17 @@ app.post("/api/profile/:type", authenticateToken, upload, async (req, res) => {
       );
     } else if (type === "jobSeeker") {
       await pool.query(
-        "INSERT INTO job_seeker_master (user_id, firstName, lastName, skills, workExperience, email, resume_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [userId, firstName, lastName, skills, workExperience, email, resumeUrl]
+        "INSERT INTO job_seeker_master (user_id, firstName, lastName, skills, workExperience, email, resume_url, phoneNumber) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+          userId,
+          firstName,
+          lastName,
+          skills,
+          workExperience,
+          email,
+          resumeUrl,
+          phoneNumber,
+        ]
       );
       await pool.query(
         "UPDATE users SET is_registered = TRUE, profile_category = 'jobSeeker' WHERE user_id = ?",
@@ -221,11 +219,26 @@ app.post("/api/update-user", authenticateToken, upload, async (req, res) => {
       );
     } else if (profileCategory === "jobSeeker") {
       // Update job seeker details
-      const { firstName, lastName, skills, workExperience, email } = req.body;
+      const {
+        firstName,
+        lastName,
+        skills,
+        workExperience,
+        email,
+        phoneNumber,
+      } = req.body;
 
       await pool.query(
-        "UPDATE job_seeker_master SET firstName = ?, lastName = ?, skills = ?, workExperience = ?, email = ? WHERE user_id = ?",
-        [firstName, lastName, skills, workExperience, email, userId]
+        "UPDATE job_seeker_master SET firstName = ?, lastName = ?, skills = ?, workExperience = ?, email = ?, phoneNumber = ? WHERE user_id = ?",
+        [
+          firstName,
+          lastName,
+          skills,
+          workExperience,
+          email,
+          phoneNumber,
+          userId,
+        ]
       );
 
       // Handle resume upload if provided
@@ -284,7 +297,7 @@ app.get("/api/job-seeker/:username", authenticateToken, async (req, res) => {
     // Retrieve job seeker details based on the provided username
     const [jobSeekerRows] = await pool.query(
       `
-      SELECT u.username, jsm.firstName, jsm.lastName, jsm.email, jsm.skills, jsm.workExperience, jsm.resume_url
+      SELECT u.username, jsm.firstName, jsm.lastName, jsm.email, jsm.skills, jsm.phoneNumber, jsm.workExperience, jsm.resume_url
       FROM users u
       JOIN job_seeker_master jsm ON u.user_id = jsm.user_id
       WHERE u.username = ? AND u.profile_category = 'jobSeeker'
@@ -301,6 +314,7 @@ app.get("/api/job-seeker/:username", authenticateToken, async (req, res) => {
       firstName: jobSeekerRows[0].firstName,
       lastName: jobSeekerRows[0].lastName,
       email: jobSeekerRows[0].email,
+      phoneNumber: jobSeekerRows[0].phoneNumber,
       skills: jobSeekerRows[0].skills,
       workExperience: jobSeekerRows[0].workExperience,
       resumeUrl: jobSeekerRows[0].resume_url,
